@@ -393,7 +393,15 @@ trait GapicClientTrait
             : [];
         switch ($transport) {
             case 'grpc':
-                return GrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
+                /*
+                 * IN TESTS WE SHOULD USE A CACHING TRANSPORT
+                 * THIS IS A HACKY INJECTION, BUT NOTHING ELSE COMES TO MY MIND RIGHT NOW
+                 */
+                if(app()->environment('testing')) {
+                    return \Instaon\Infrastructure\Platforms\GoogleAds\IORecorder\VCRGrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
+                } else {
+                    return GrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
+                }
             case 'grpc-fallback':
                 return GrpcFallbackTransport::build($apiEndpoint, $configForSpecifiedTransport);
             case 'rest':
