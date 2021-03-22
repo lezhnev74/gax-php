@@ -400,7 +400,7 @@ trait GapicClientTrait
                  * THIS IS A HACKY INJECTION, BUT NOTHING ELSE COMES TO MY MIND RIGHT NOW
                  */
                 if(app()->environment('testing')) {
-                    return \Instaon\Infrastructure\Platforms\GoogleAds\IORecorder\VCRGrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
+                    return \App\Infrastructure\Platforms\GoogleAds\IORecorder\VCRGrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
                 } else {
                     return GrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
                 }
