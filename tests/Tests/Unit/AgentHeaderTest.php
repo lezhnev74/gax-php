@@ -43,7 +43,9 @@ class AgentHeaderTest extends TestCase
             'gl-php/' . phpversion() .
             ' gapic/' .
             ' gax/' . Version::getApiCoreVersion() .
-            ' grpc/' . phpversion('grpc')
+            ' grpc/' . phpversion('grpc') .
+            ' rest/' . Version::getApiCoreVersion() .
+            ' pb/' . (phpversion('protobuf') ? phpversion('protobuf') . '+c' : '+n')
         ]];
 
         $header = AgentHeader::buildAgentHeader([]);
@@ -53,7 +55,7 @@ class AgentHeaderTest extends TestCase
     public function testWithInput()
     {
         $expectedHeader = [AgentHeader::AGENT_HEADER_KEY => [
-            'gl-php/4.4.4 gccl/1.1.1 gapic/2.2.2 gax/3.3.3 grpc/5.5.5'
+            'gl-php/4.4.4 gccl/1.1.1 gapic/2.2.2 gax/3.3.3 grpc/5.5.5 rest/3.3.3 pb/6.6.6+n'
         ]];
 
         $header = AgentHeader::buildAgentHeader([
@@ -63,6 +65,7 @@ class AgentHeaderTest extends TestCase
             'apiCoreVersion' => '3.3.3',
             'phpVersion' => '4.4.4',
             'grpcVersion' => '5.5.5',
+            'protobufVersion' => '6.6.6+n',
         ]);
 
         $this->assertSame($expectedHeader, $header);
@@ -73,7 +76,9 @@ class AgentHeaderTest extends TestCase
         $expectedHeader = [AgentHeader::AGENT_HEADER_KEY => [
             'gl-php/' . phpversion() .
             ' gccl/ gapic/ gax/' . Version::getApiCoreVersion() .
-            ' grpc/' . phpversion('grpc')
+            ' grpc/' . phpversion('grpc') .
+            ' rest/' . Version::getApiCoreVersion() .
+            ' pb/' . (phpversion('protobuf') ? phpversion('protobuf') . '+c' : '+n')
         ]];
 
         $header = AgentHeader::buildAgentHeader([
@@ -88,7 +93,9 @@ class AgentHeaderTest extends TestCase
         $expectedHeader = [AgentHeader::AGENT_HEADER_KEY => [
             'gl-php/' . phpversion() .
             ' gccl/ gapic/ gax/' . Version::getApiCoreVersion() .
-            ' grpc/' . phpversion('grpc')
+            ' grpc/' . phpversion('grpc') .
+            ' rest/' . Version::getApiCoreVersion() .
+            ' pb/' . (phpversion('protobuf') ? phpversion('protobuf') . '+c' : '+n')
         ]];
 
         $header = AgentHeader::buildAgentHeader([
@@ -98,6 +105,7 @@ class AgentHeaderTest extends TestCase
             'apiCoreVersion' => null,
             'phpVersion' => null,
             'grpcVersion' => null,
+            'protobufVersion' => null,
         ]);
 
         $this->assertSame($expectedHeader, $header);
@@ -113,6 +121,47 @@ class AgentHeaderTest extends TestCase
 
     public function testGetGapicVersionWithNoAvailableVersion()
     {
-        $this->assertEquals('', AgentHeader::readGapicVersionFromFile(__CLASS__));
+        $this->assertSame('', AgentHeader::readGapicVersionFromFile(__CLASS__));
+    }
+
+    public function testWithGrpcAndRest()
+    {
+        $expectedHeader = [AgentHeader::AGENT_HEADER_KEY => [
+            'gl-php/' . phpversion() .
+            ' gapic/' .
+            ' gax/3.3.3' .
+            ' grpc/4.4.4' .
+            ' rest/5.5.5' .
+            ' pb/6.6.6+n'
+        ]];
+
+        $header = AgentHeader::buildAgentHeader([
+            'apiCoreVersion' => '3.3.3',
+            'grpcVersion' => '4.4.4',
+            'restVersion' => '5.5.5',
+            'protobufVersion' => '6.6.6+n',
+        ]);
+
+        $this->assertSame($expectedHeader, $header);
+    }
+
+    public function testWithRestAndGaxFallback()
+    {
+        $expectedHeader = [AgentHeader::AGENT_HEADER_KEY => [
+            'gl-php/' . phpversion() .
+            ' gapic/' .
+            ' gax/3.3.3' .
+            ' grpc/' . phpversion('grpc') .
+            ' rest/3.3.3' .
+            ' pb/6.6.6+n'
+        ]];
+
+        $header = AgentHeader::buildAgentHeader([
+            'apiCoreVersion' => '3.3.3',
+            'restVersion' => null,
+            'protobufVersion' => '6.6.6+n',
+        ]);
+
+        $this->assertSame($expectedHeader, $header);
     }
 }

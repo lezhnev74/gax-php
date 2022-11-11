@@ -32,26 +32,37 @@
 
 namespace Google\ApiCore\Tests\Unit\Transport;
 
-use Google\ApiCore\CredentialsWrapper;
+use BadMethodCallException;
+use Exception;
+use Google\ApiCore\ApiException;
 use Google\ApiCore\Call;
+use Google\ApiCore\CredentialsWrapper;
 use Google\ApiCore\RequestBuilder;
 use Google\ApiCore\Testing\MockRequest;
 use Google\ApiCore\Testing\MockResponse;
+use Google\ApiCore\Tests\Unit\TestTrait;
 use Google\ApiCore\Transport\RestTransport;
-use Google\Auth\FetchAuthTokenInterface;
+use Google\ApiCore\ValidationException;
 use Google\Auth\HttpHandler\HttpHandlerFactory;
+use Google\Protobuf\Any;
+use Google\Rpc\ErrorInfo;
 use GuzzleHttp\Exception\RequestException;
-use GuzzleHttp\Promise;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
-use PHPUnit\Framework\TestCase;
+use InvalidArgumentException;
 use Psr\Http\Message\RequestInterface;
+use TypeError;
+use UnexpectedValueException;
+use Yoast\PHPUnitPolyfills\TestCases\TestCase;
 
 class RestTransportTest extends TestCase
 {
+    use TestTrait;
+
     private $call;
 
-    public function setUp()
+    public function set_up()
     {
         $this->call = new Call(
             'Testing123',
@@ -68,6 +79,8 @@ class RestTransportTest extends TestCase
             ->getMock();
         $requestBuilder->method('build')
             ->willReturn($request);
+        $requestBuilder->method('pathExists')
+            ->willReturn(true);
 
         return new RestTransport(
             $requestBuilder,
@@ -92,7 +105,7 @@ class RestTransportTest extends TestCase
 
         $httpHandler = function (RequestInterface $request, array $options = []) use ($body, $expectedRequest) {
             $this->assertEquals($expectedRequest, $request);
-            return Promise\promise_for(
+            return Create::promiseFor(
                 new Response(
                     200,
                     [],
@@ -118,27 +131,38 @@ class RestTransportTest extends TestCase
         ];
     }
 
-    /**
-     * @expectedException \Exception
-     */
     public function testStartUnaryCallThrowsException()
     {
         $httpHandler = function (RequestInterface $request, array $options = []) {
-            return Promise\rejection_for(new \Exception());
+            return Create::rejectionFor(new Exception());
         };
+
+        $this->expectException(Exception::class);
 
         $this->getTransport($httpHandler)
             ->startUnaryCall($this->call, [])
             ->wait();
     }
 
-    /**
-     * @expectedException \Google\ApiCore\ApiException
-     */
+    public function testServerStreamingCallThrowsBadMethodCallException()
+    {
+        $request = new Request('POST', 'http://www.example.com');
+        $requestBuilder = $this->getMockBuilder(RequestBuilder::class)
+            ->disableOriginalConstructor()
+            ->getMock();
+        $requestBuilder->method('pathExists')
+            ->willReturn(false);
+
+        $transport = new RestTransport($requestBuilder, HttpHandlerFactory::build());
+
+        $this->expectException(BadMethodCallException::class);
+        $transport->startServerStreamingCall($this->call, []);
+    }
+
     public function testStartUnaryCallThrowsRequestException()
     {
         $httpHandler = function (RequestInterface $request, array $options = []) {
-            return Promise\rejection_for(
+            return Create::rejectionFor(
                 RequestException::create(
                     new Request('POST', 'http://www.example.com'),
                     new Response(
@@ -155,9 +179,148 @@ class RestTransportTest extends TestCase
             );
         };
 
+        $this->expectException(ApiException::class);
+
         $this->getTransport($httpHandler)
             ->startUnaryCall($this->call, [])
             ->wait();
+    }
+    /**
+     * @dataProvider buildServerStreamMessages
+     */
+    public function testStartServerStreamingCall($messages)
+    {
+        $apiEndpoint = 'www.example.com';
+        $expectedRequest = new Request(
+            'POST',
+            $apiEndpoint,
+            [],
+            ""
+        );
+
+        $httpHandler = function (RequestInterface $request, array $options = []) use ($messages, $expectedRequest) {
+            $this->assertEquals($expectedRequest, $request);
+            return Create::promiseFor(
+                new Response(
+                    200,
+                    [],
+                    $this->encodeMessages($messages)
+                )
+            );
+        };
+
+        $stream = $this->getTransport($httpHandler, $apiEndpoint)
+            ->startServerStreamingCall($this->call, []);
+
+        $num = 0;
+        foreach ($stream->readAll() as $m) {
+            $this->assertEquals($messages[$num], $m);
+            $num++;
+        }
+        $this->assertEquals(count($messages), $num);
+    }
+
+    /**
+     * @dataProvider buildServerStreamMessages
+     */
+    public function testCancelServerStreamingCall($messages)
+    {
+        $apiEndpoint = 'www.example.com';
+        $expectedRequest = new Request(
+            'POST',
+            $apiEndpoint,
+            [],
+            ""
+        );
+
+        $httpHandler = function (RequestInterface $request, array $options = []) use ($messages, $expectedRequest) {
+            $this->assertEquals($expectedRequest, $request);
+            return Create::promiseFor(
+                new Response(
+                    200,
+                    [],
+                    $this->encodeMessages($messages)
+                )
+            );
+        };
+
+        $stream = $this->getTransport($httpHandler, $apiEndpoint)
+            ->startServerStreamingCall($this->call, []);
+
+        $num = 0;
+        foreach ($stream->readAll() as $m) {
+            $this->assertEquals($messages[$num], $m);
+            $num++;
+
+            // Intentionally cancel the stream mid way through processing.
+            $stream->getServerStreamingCall()->cancel();
+        }
+
+        // Ensure only one message was ever yielded.
+        $this->assertEquals(1, $num);
+    }
+
+    private function encodeMessages(array $messages)
+    {
+        $data = [];
+        foreach ($messages as $message) {
+            $data[] = $message->serializeToJsonString();
+        }
+        return '['.implode(',', $data).']';
+    }
+
+    public function buildServerStreamMessages()
+    {
+        return[
+            [
+                [
+                    new MockResponse([
+                        'name' => 'foo',
+                        'number' => 1,
+                    ]),
+                    new MockResponse([
+                        'name' => 'bar',
+                        'number' => 2,
+                    ]),
+                    new MockResponse([
+                        'name' => 'baz',
+                        'number' => 3,
+                    ]),
+                ]
+            ]
+        ];
+    }
+
+    public function testStartServerStreamingCallThrowsRequestException()
+    {
+        $apiEndpoint = 'http://www.example.com';
+        $errorInfo = new Any();
+        $errorInfo->pack(new ErrorInfo(['domain' => 'googleapis.com']));
+        $httpHandler = function (RequestInterface $request, array $options = []) use ($apiEndpoint, $errorInfo) {
+            return Create::rejectionFor(
+                RequestException::create(
+                    new Request('POST', $apiEndpoint),
+                    new Response(
+                        404,
+                        [],
+                        json_encode([[
+                            'error' => [
+                                'status' => 'NOT_FOUND',
+                                'message' => 'Ruh-roh.',
+                                'details' => [$errorInfo]
+                            ]
+                        ]])
+                    )
+                )
+            );
+        };
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionCode(5);
+        $this->expectExceptionMessage('Ruh-roh');
+
+        $this->getTransport($httpHandler, $apiEndpoint)
+            ->startServerStreamingCall($this->call, []);
     }
 
     /**
@@ -192,12 +355,48 @@ class RestTransportTest extends TestCase
         ];
     }
 
+    public function testClientCertSourceOptionValid()
+    {
+        $mockClientCertSource = function () {
+            return 'MOCK_CERT_SOURCE';
+        };
+        $transport = RestTransport::build(
+            'address.com:123',
+            __DIR__ . '/../testdata/test_service_rest_client_config.php',
+            ['clientCertSource' => $mockClientCertSource]
+        );
+
+        $reflectionClass = new \ReflectionClass($transport);
+        $reflectionProp = $reflectionClass->getProperty('clientCertSource');
+        $reflectionProp->setAccessible(true);
+        $actualClientCertSource = $reflectionProp->getValue($transport);
+
+        $this->assertEquals($mockClientCertSource, $actualClientCertSource);
+    }
+
+    public function testClientCertSourceOptionInvalid()
+    {
+        $this->requiresPhp7();
+
+        $mockClientCertSource = 'foo';
+
+        $this->expectException(TypeError::class);
+        $this->expectExceptionMessageMatches('/must be.+callable/i');
+
+        RestTransport::build(
+            'address.com:123',
+            __DIR__ . '/../testdata/test_service_rest_client_config.php',
+            ['clientCertSource' => $mockClientCertSource]
+        );
+    }
+
     /**
      * @dataProvider buildInvalidData
-     * @expectedException \Google\ApiCore\ValidationException
      */
     public function testBuildInvalid($apiEndpoint, $restConfigPath, $args)
     {
+        $this->expectException(ValidationException::class);
+
         RestTransport::build($apiEndpoint, $restConfigPath, $args);
     }
 
@@ -218,15 +417,10 @@ class RestTransportTest extends TestCase
         ];
     }
 
-    /**
-     * @expectedException \Google\ApiCore\ApiException
-     * @expectedExceptionMessage <html><body>This is an HTML response<\/body><\/html>
-     * @expectedExceptionCode 5
-     */
     public function testNonJsonResponseException()
     {
         $httpHandler = function (RequestInterface $request, array $options = []) {
-            return Promise\rejection_for(
+            return Create::rejectionFor(
                 RequestException::create(
                     new Request('POST', 'http://www.example.com'),
                     new Response(
@@ -238,6 +432,10 @@ class RestTransportTest extends TestCase
             );
         };
 
+        $this->expectException(ApiException::class);
+        $this->expectExceptionCode(5);
+        $this->expectExceptionMessage('<html><body>This is an HTML response<\/body><\/html>');
+
         $this->getTransport($httpHandler)
             ->startUnaryCall($this->call, [])
             ->wait();
@@ -248,7 +446,9 @@ class RestTransportTest extends TestCase
         $credentialsWrapper = $this->prophesize(CredentialsWrapper::class);
         $credentialsWrapper->getAuthorizationHeaderCallback('an-audience')
             ->shouldBeCalledOnce()
-            ->willReturn(function() { return []; });
+            ->willReturn(function () {
+                return [];
+            });
 
         $options = [
             'audience' => 'an-audience',
@@ -256,7 +456,7 @@ class RestTransportTest extends TestCase
         ];
 
         $httpHandler = function (RequestInterface $request, array $options = []) {
-            return Promise\promise_for(new Response(200, [], '{}'));
+            return Create::promiseFor(new Response(200, [], '{}'));
         };
 
         $this->getTransport($httpHandler)
@@ -264,34 +464,34 @@ class RestTransportTest extends TestCase
             ->wait();
     }
 
-    /**
-     * @expectedException \InvalidArgumentException
-     * @expectedExceptionMessage The "headers" option must be an array
-     */
     public function testNonArrayHeadersThrowsException()
     {
         $options = [
             'headers' => 'not-an-array',
         ];
 
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The "headers" option must be an array');
+
         $this->getTransport()
             ->startUnaryCall($this->call, $options);
     }
 
-    /**
-     * @expectedException \UnexpectedValueException
-     * @expectedExceptionMessage Expected array response from authorization header callback
-     */
     public function testNonArrayAuthorizationHeaderThrowsException()
     {
         $credentialsWrapper = $this->prophesize(CredentialsWrapper::class);
         $credentialsWrapper->getAuthorizationHeaderCallback(null)
             ->shouldBeCalledOnce()
-            ->willReturn(function() { return ''; });
+            ->willReturn(function () {
+                return '';
+            });
 
         $options = [
             'credentialsWrapper' => $credentialsWrapper->reveal(),
         ];
+
+        $this->expectException(UnexpectedValueException::class);
+        $this->expectExceptionMessage('Expected array response from authorization header callback');
 
         $this->getTransport()
             ->startUnaryCall($this->call, $options);

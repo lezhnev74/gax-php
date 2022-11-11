@@ -31,13 +31,10 @@
  */
 namespace Google\ApiCore\Tests\Unit;
 
-use Grpc\UnaryCall;
-use Google\ApiCore\Testing\MockResponse;
-use Google\ApiCore\Testing\MockRequest;
-use Google\ApiCore\Testing\MockStatus;
 use Google\ApiCore\LongRunning\OperationsClient;
+use Google\ApiCore\Testing\MockRequest;
+use Google\ApiCore\Testing\MockResponse;
 use Google\Protobuf\Any;
-use Google\Rpc\Code;
 use Google\Rpc\Status;
 
 trait TestTrait
@@ -139,6 +136,13 @@ trait TestTrait
         }
         if (defined('HHVM_VERSION')) {
             self::markTestSkipped('gRPC is not supported on HHVM.');
+        }
+    }
+
+    public static function requiresPhp7()
+    {
+        if (version_compare(phpversion(), '7.0', '<')) {
+            self::markTestSkipped('This test requires PHP 7.0 or above.');
         }
     }
 }

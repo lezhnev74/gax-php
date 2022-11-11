@@ -32,10 +32,14 @@
 namespace Google\ApiCore\Tests\Unit;
 
 use Google\ApiCore\RetrySettings;
+use Google\ApiCore\ValidationException;
 use PHPUnit\Framework\TestCase;
+use Yoast\PHPUnitPolyfills\Polyfills\ExpectException;
 
 class RetrySettingsTest extends TestCase
 {
+    use ExpectException;
+
     const SERVICE_NAME = 'test.interface.v1.api';
 
     private static function buildInputConfig()
@@ -71,12 +75,12 @@ class RetrySettingsTest extends TestCase
         $this->assertEquals(40000, $timeoutOnlyMethod->getNoRetriesRpcTimeoutMillis());
     }
 
-    /**
-     * @expectedException \Google\ApiCore\ValidationException
-     */
     public function testLoadInvalid()
     {
         $inputConfig = RetrySettingsTest::buildInvalidInputConfig();
+
+        $this->expectException(ValidationException::class);
+
         RetrySettings::load(
             RetrySettingsTest::SERVICE_NAME,
             $inputConfig
@@ -102,12 +106,11 @@ class RetrySettingsTest extends TestCase
         $this->assertEquals(40000, $timeoutOnlyMethod->getNoRetriesRpcTimeoutMillis());
     }
 
-    /**
-     * @expectedException \Google\ApiCore\ValidationException
-     */
     public function testRetrySettingsMissingFields()
     {
-        $retrySettings = new RetrySettings([
+        $this->expectException(ValidationException::class);
+
+        new RetrySettings([
             'initialRetryDelayMillis' => 100,
             'retryDelayMultiplier' => 1.3,
             // Missing field:
@@ -141,6 +144,23 @@ class RetrySettingsTest extends TestCase
         $retrySettings = new RetrySettings($settings);
         $withRetrySettings = $retrySettings->with($withSettings);
         $this->compare($withRetrySettings, $expectedValues);
+    }
+
+    public function testLogicalTimeout()
+    {
+        $timeout = 10000;
+        $expectedValues = [
+            'initialRpcTimeoutMillis' => $timeout,
+            'maxRpcTimeoutMillis' => $timeout,
+            'totalTimeoutMillis' => $timeout,
+            'noRetriesRpcTimeoutMillis' => $timeout,
+            'rpcTimeoutMultiplier' => 1.0
+        ];
+        $timeoutSettings = RetrySettings::logicalTimeout($timeout);
+        $this->assertSame(
+            $expectedValues,
+            $timeoutSettings
+        );
     }
 
     private function compare(RetrySettings $retrySettings, $expectedValues)
