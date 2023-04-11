@@ -341,6 +341,18 @@ class OperationResponseTest extends TestCase
         $operationResponse->delete();
     }
 
+    public function testPollingCastToInt()
+    {
+        $op = $this->createOperationResponse([], 3);
+        $op->pollUntilComplete([
+            'initialPollDelayMillis' => 3.0,
+            'pollDelayMultiplier' => 1.5,
+        ]);
+
+        $this->assertEquals($op->isDone(), true);
+        $this->assertEquals($op->getSleeps(), [3, 4, 6]);
+    }
+
     private function createOperationResponse($options, $reloadCount)
     {
         $opName = 'operations/opname';
@@ -372,6 +384,8 @@ class OperationResponseTest extends TestCase
 class FakeOperationResponse extends OperationResponse
 {
     private $currentTime = 0;
+    private $sleeps;
+
     public function getSleeps()
     {
         return $this->sleeps;
