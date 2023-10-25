@@ -499,6 +499,15 @@ trait GapicClientTrait
                     $configForSpecifiedTransport['stubOpts']['grpc.primary_user_agent'] .=
                         $this->agentHeader['User-Agent'][0];
                 }
+
+                /*
+                 * IN TESTS WE SHOULD USE A CACHING TRANSPORT
+                 * THIS IS A HACKY INJECTION, BUT NOTHING ELSE COMES TO MY MIND RIGHT NOW
+                 */
+                if(app()->environment('testing')) {
+                    return \App\Infrastructure\Platforms\GoogleAds\IORecorder\VCRGrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
+                }
+
                 return GrpcTransport::build($apiEndpoint, $configForSpecifiedTransport);
             case 'grpc-fallback':
                 return GrpcFallbackTransport::build($apiEndpoint, $configForSpecifiedTransport);
