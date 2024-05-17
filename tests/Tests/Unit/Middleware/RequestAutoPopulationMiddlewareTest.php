@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright 2018 Google LLC
+ * Copyright 2024 Google LLC
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,51 +29,50 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-namespace Google\ApiCore\Middleware;
 
+namespace Google\ApiCore\Tests\Unit\Middleware;
+
+use Google\Api\FieldInfo\Format;
 use Google\ApiCore\Call;
-use Google\ApiCore\Page;
-use Google\ApiCore\PagedListResponse;
-use Google\ApiCore\PageStreamingDescriptor;
-use Google\Protobuf\Internal\Message;
-use GuzzleHttp\Promise\PromiseInterface;
+use Google\ApiCore\Middleware\RequestAutoPopulationMiddleware;
+use Google\ApiCore\Testing\MockRequest;
+use PHPUnit\Framework\TestCase;
+use Ramsey\Uuid\Uuid;
 
-/**
-* Middleware which wraps the response in an PagedListResponses object.
-*/
-class PagedMiddleware implements MiddlewareInterface
+class RequestAutoPopulationMiddlewareTest extends TestCase
 {
-    /** @var callable */
-    private $nextHandler;
-    private PageStreamingDescriptor $descriptor;
-
-    /**
-     * @param callable $nextHandler
-     * @param PageStreamingDescriptor $descriptor
-     */
-    public function __construct(
-        callable $nextHandler,
-        PageStreamingDescriptor $descriptor
-    ) {
-        $this->nextHandler = $nextHandler;
-        $this->descriptor = $descriptor;
+    public function testRequestPopulated()
+    {
+        $request = new MockRequest();
+        $next = function ($call, $options) {
+            $this->assertTrue(Uuid::isValid($call->getMessage()->getPageToken()));
+            return true;
+        };
+        $call = new Call('GetExample', 'Example', $request);
+        $middleware = new RequestAutoPopulationMiddleware(
+            $next,
+            ['pageToken' => Format::UUID4]
+        );
+        $this->assertTrue($middleware->__invoke($call, []));
     }
 
-    public function __invoke(Call $call, array $options)
+    public function testRequestAutoPopulatedThrowsForInvalidValueType()
     {
-        $next = $this->nextHandler;
-        $descriptor = $this->descriptor;
-        return $next($call, $options)->then(
-            function (Message $response) use ($call, $next, $options, $descriptor) {
-                $page = new Page(
-                    $call,
-                    $options,
-                    $next,
-                    $descriptor,
-                    $response
-                );
-                return new PagedListResponse($page);
-            }
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage(
+            'Value type Google\Api\FieldInfo\Format::FORMAT_UNSPECIFIED not '
+            . 'supported for auto population of the field pageToken'
         );
+        $request = new MockRequest();
+        $next = function ($call, $options) {
+            $this->assertTrue(empty($call->getMessage()->getPageToken()));
+            return true;
+        };
+        $call = new Call('GetExample', 'Example', $request);
+        $middleware = new RequestAutoPopulationMiddleware(
+            $next,
+            ['pageToken' => Format::FORMAT_UNSPECIFIED]
+        );
+        $middleware->__invoke($call, []);
     }
 }

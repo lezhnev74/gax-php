@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright 2018 Google LLC
+ * Copyright 2024 Google LLC
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,51 +29,56 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-namespace Google\ApiCore\Middleware;
 
+namespace Google\ApiCore\Tests\Unit;
+
+use Google\ApiCore\InsecureCredentialsWrapper;
+use Google\ApiCore\Transport\HttpUnaryTransportTrait;
+use Google\ApiCore\Transport\GrpcTransport;
 use Google\ApiCore\Call;
-use Google\ApiCore\Page;
-use Google\ApiCore\PagedListResponse;
-use Google\ApiCore\PageStreamingDescriptor;
-use Google\Protobuf\Internal\Message;
-use GuzzleHttp\Promise\PromiseInterface;
+use Grpc\ChannelCredentials;
+use GuzzleHttp\Promise\Promise;
+use PHPUnit\Framework\TestCase;
+use Prophecy\PhpUnit\ProphecyTrait;
 
-/**
-* Middleware which wraps the response in an PagedListResponses object.
-*/
-class PagedMiddleware implements MiddlewareInterface
+class InsecureCredentialsWrapperTest extends TestCase
 {
-    /** @var callable */
-    private $nextHandler;
-    private PageStreamingDescriptor $descriptor;
+    use TestTrait;
+    use ProphecyTrait;
 
-    /**
-     * @param callable $nextHandler
-     * @param PageStreamingDescriptor $descriptor
-     */
-    public function __construct(
-        callable $nextHandler,
-        PageStreamingDescriptor $descriptor
-    ) {
-        $this->nextHandler = $nextHandler;
-        $this->descriptor = $descriptor;
-    }
-
-    public function __invoke(Call $call, array $options)
+    public function testInsecureCredentialsWrapperWithHttpTransport()
     {
-        $next = $this->nextHandler;
-        $descriptor = $this->descriptor;
-        return $next($call, $options)->then(
-            function (Message $response) use ($call, $next, $options, $descriptor) {
-                $page = new Page(
-                    $call,
-                    $options,
-                    $next,
-                    $descriptor,
-                    $response
-                );
-                return new PagedListResponse($page);
+        $httpImpl = new class () {
+            use HttpUnaryTransportTrait {
+                buildCommonHeaders as public;
             }
-        );
+        };
+
+        $headers = $httpImpl->buildCommonHeaders([
+            'credentialsWrapper' => new InsecureCredentialsWrapper(),
+        ]);
+
+        $this->assertEmpty($headers);
     }
+
+    public function testInsecureCredentialsWrapperWithGrpcTransport()
+    {
+        $this->requiresGrpcExtension();
+
+        $message = $this->createMockRequest();
+        $call = $this->prophesize(Call::class);
+        $call->getMessage()->willReturn($message);
+        $call->getMethod()->shouldBeCalled();
+        $call->getDecodeType()->shouldBeCalled();
+
+        $grpc = new GrpcTransport('', ['credentials' => ChannelCredentials::createInsecure()]);
+
+        $response = $grpc->startUnaryCall(
+            $call->reveal(),
+            ['credentialsWrapper' => new InsecureCredentialsWrapper()]
+        );
+
+        $this->assertInstanceOf(Promise::class, $response);
+    }
+
 }

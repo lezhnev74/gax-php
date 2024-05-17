@@ -32,7 +32,6 @@
 
 namespace Google\ApiCore\Tests\Unit;
 
-use GapicClientStub;
 use Google\ApiCore\AgentHeader;
 use Google\ApiCore\BidiStream;
 use Google\ApiCore\Call;
@@ -40,8 +39,8 @@ use Google\ApiCore\ClientStream;
 use Google\ApiCore\CredentialsWrapper;
 use Google\ApiCore\GapicClientTrait;
 use Google\ApiCore\LongRunning\OperationsClient;
+use Google\ApiCore\Middleware\MiddlewareInterface;
 use Google\ApiCore\OperationResponse;
-use Google\ApiCore\Options\TransportOptions;
 use Google\ApiCore\RequestParamsHeaderDescriptor;
 use Google\ApiCore\RetrySettings;
 use Google\ApiCore\ServerStream;
@@ -53,13 +52,10 @@ use Google\ApiCore\Transport\GrpcTransport;
 use Google\ApiCore\Transport\RestTransport;
 use Google\ApiCore\Transport\TransportInterface;
 use Google\ApiCore\ValidationException;
-use Google\Auth\CredentialsLoader;
-use Google\Auth\FetchAuthTokenInterface;
 use Google\LongRunning\Operation;
-use Grpc\Gcp\ApiConfig;
 use Grpc\Gcp\Config;
 use GuzzleHttp\Promise\FulfilledPromise;
-use InvalidArgumentException;
+use GuzzleHttp\Promise\PromiseInterface;
 use PHPUnit\Framework\TestCase;
 use Prophecy\Argument;
 use Prophecy\PhpUnit\ProphecyTrait;
@@ -119,7 +115,8 @@ class GapicClientTraitTest extends TestCase
                     'headers' => $expectedHeaders,
                     'credentialsWrapper' => $credentialsWrapper,
                 ])
-            );
+            )
+            ->willReturn($this->prophesize(PromiseInterface::class)->reveal());
         $client = new StubGapicClient();
         $client->set('agentHeader', $header);
         $client->set('retrySettings', [
@@ -138,6 +135,86 @@ class GapicClientTraitTest extends TestCase
         );
     }
 
+    public function testVersionedHeadersOverwriteBehavion()
+    {
+        $unaryDescriptors = [
+            'callType' => Call::UNARY_CALL,
+            'responseType' => 'decodeType',
+            'headerParams' => [
+                [
+                    'fieldAccessors' => ['getName'],
+                    'keyName' => 'name'
+                ]
+            ]
+        ];
+        $request = new MockRequestBody(['name' => 'foos/123/bars/456']);
+        $header = AgentHeader::buildAgentHeader([
+            'libName' => 'gccl',
+            'libVersion' => '0.0.0',
+            'gapicVersion' => '0.9.0',
+            'apiCoreVersion' => '1.0.0',
+            'phpVersion' => '5.5.0',
+            'grpcVersion' => '1.0.1',
+            'protobufVersion' => '6.6.6',
+        ]);
+        $headers = [
+            'x-goog-api-client' => ['this-should-not-be-used'],
+            'new-header' => ['this-should-be-used'],
+            'X-Goog-Api-Version' => ['this-should-not-be-used'],
+        ];
+        $expectedHeaders = [
+            'x-goog-api-client' => ['gl-php/5.5.0 gccl/0.0.0 gapic/0.9.0 gax/1.0.0 grpc/1.0.1 rest/1.0.0 pb/6.6.6'],
+            'new-header' => ['this-should-be-used'],
+            'X-Goog-Api-Version' => ['20240418'],
+            'x-goog-request-params' => ['name=foos%2F123%2Fbars%2F456'],
+        ];
+        $transport = $this->getMockBuilder(TransportInterface::class)->disableOriginalConstructor()->getMock();
+        $credentialsWrapper = CredentialsWrapper::build([
+            'keyFile' => __DIR__ . '/testdata/json-key-file.json'
+        ]);
+        $transport->expects($this->once())
+            ->method('startUnaryCall')
+            ->with(
+                $this->isInstanceOf(Call::class),
+                $this->equalTo([
+                    'headers' => $expectedHeaders,
+                    'credentialsWrapper' => $credentialsWrapper,
+                ])
+            )
+            ->willReturn($this->prophesize(PromiseInterface::class)->reveal());
+        $client = new VersionedStubGapicClient();
+        $client->set('agentHeader', $header);
+        $client->set('retrySettings', [
+            'method' => $this->getMockBuilder(RetrySettings::class)
+                ->disableOriginalConstructor()
+                ->getMock()
+            ]
+        );
+        $client->set('transport', $transport);
+        $client->set('credentialsWrapper', $credentialsWrapper);
+        $client->set('descriptors', ['method' => $unaryDescriptors]);
+        $client->startApiCall(
+            'method',
+            $request,
+            ['headers' => $headers]
+        );
+    }
+
+    public function testConfigureCallConstructionOptions()
+    {
+        $client = new StubGapicClient();
+        $client->setClientOptions($client->buildClientOptions([]));
+        $retrySettings = RetrySettings::constructDefault();
+        $expected = [
+            'retrySettings' => $retrySettings,
+            'autoPopulationSettings' => [
+                'pageToken' => \Google\Api\FieldInfo\Format::UUID4,
+            ],
+        ];
+        $actual = $client->configureCallConstructionOptions('PageStreamingMethod', ['retrySettings' => $retrySettings]);
+        $this->assertEquals($expected, $actual);
+    }
+
     public function testConfigureCallConstructionOptionsAcceptsRetryObjectOrArray()
     {
         $defaultRetrySettings = RetrySettings::constructDefault();
@@ -145,7 +222,8 @@ class GapicClientTraitTest extends TestCase
         $client->set('retrySettings', ['method' => $defaultRetrySettings]);
         $expectedOptions = [
             'retrySettings' => $defaultRetrySettings
-                ->with(['rpcTimeoutMultiplier' => 5])
+                ->with(['rpcTimeoutMultiplier' => 5]),
+            'autoPopulationSettings' => []
         ];
         $actualOptionsWithObject = $client->configureCallConstructionOptions(
             'method',
@@ -394,11 +472,11 @@ class GapicClientTraitTest extends TestCase
         $transport->expects($this->once())
              ->method('startUnaryCall')
              ->with(
-                $this->callback(function($call) use ($unaryDescriptors) {
-                    return strpos($call->getMethod(), $unaryDescriptors['interfaceOverride']) !== false;
-                }),
-                $this->anything()
-            )
+                 $this->callback(function ($call) use ($unaryDescriptors) {
+                     return strpos($call->getMethod(), $unaryDescriptors['interfaceOverride']) !== false;
+                 }),
+                 $this->anything()
+             )
              ->will($this->returnValue($expectedPromise));
         $credentialsWrapper = CredentialsWrapper::build([]);
         $client = new StubGapicClient();
@@ -507,11 +585,11 @@ class GapicClientTraitTest extends TestCase
         $transport->expects($this->once())
              ->method('startUnaryCall')
              ->with(
-                $this->callback(function($call) use ($pagedDescriptors) {
-                    return strpos($call->getMethod(), $pagedDescriptors['interfaceOverride']) !== false;
-                }),
-                $this->anything()
-            )
+                 $this->callback(function ($call) use ($pagedDescriptors) {
+                     return strpos($call->getMethod(), $pagedDescriptors['interfaceOverride']) !== false;
+                 }),
+                 $this->anything()
+             )
              ->will($this->returnValue($expectedPromise));
         $credentialsWrapper = CredentialsWrapper::build([]);
         $client = new StubGapicClient();
@@ -587,105 +665,6 @@ class GapicClientTraitTest extends TestCase
                 ],
                 'not supported for async execution'
             ],
-        ];
-    }
-
-    public function testGetGapicVersionWithVersionFile()
-    {
-        require_once __DIR__ . '/testdata/src/GapicClientStub.php';
-        $version = '1.2.3-dev';
-        $client = new \GapicClientStub();
-        $this->assertEquals($version, $client->getGapicVersion([]));
-    }
-
-    public function testGetGapicVersionWithNoAvailableVersion()
-    {
-        $client = new StubGapicClient();
-        $this->assertSame('', $client->getGapicVersion([]));
-    }
-
-    public function testGetGapicVersionWithLibVersion()
-    {
-        $version = '1.2.3-dev';
-        $client = new StubGapicClient();
-        $client->set('gapicVersionFromFile', $version, true);
-        $options = ['libVersion' => $version];
-        $this->assertEquals($version, $client->getGapicVersion(
-            $options
-        ));
-    }
-
-    /**
-     * @dataProvider createCredentialsWrapperData
-     */
-    public function testCreateCredentialsWrapper($auth, $authConfig, $expectedCredentialsWrapper)
-    {
-        $client = new StubGapicClient();
-        $actualCredentialsWrapper = $client->createCredentialsWrapper(
-            $auth,
-            $authConfig,
-        );
-
-        $this->assertEquals($expectedCredentialsWrapper, $actualCredentialsWrapper);
-    }
-
-    public function createCredentialsWrapperData()
-    {
-        $keyFilePath = __DIR__ . '/testdata/json-key-file.json';
-        $keyFile = json_decode(file_get_contents($keyFilePath), true);
-        $fetcher = $this->prophesize(FetchAuthTokenInterface::class)->reveal();
-        $credentialsWrapper = new CredentialsWrapper($fetcher);
-        return [
-            [null, [], CredentialsWrapper::build()],
-            [$keyFilePath, [], CredentialsWrapper::build(['keyFile' => $keyFile])],
-            [$keyFile, [], CredentialsWrapper::build(['keyFile' => $keyFile])],
-            [$fetcher, [], new CredentialsWrapper($fetcher)],
-            [$credentialsWrapper, [], $credentialsWrapper],
-        ];
-    }
-
-    /**
-     * @dataProvider createCredentialsWrapperValidationExceptionData
-     */
-    public function testCreateCredentialsWrapperValidationException($auth, $authConfig)
-    {
-        $client = new StubGapicClient();
-
-        $this->expectException(ValidationException::class);
-
-        $client->createCredentialsWrapper(
-            $auth,
-            $authConfig,
-        );
-    }
-
-    public function createCredentialsWrapperValidationExceptionData()
-    {
-        return [
-            ['not a json string', []],
-            [new \stdClass(), []],
-        ];
-    }
-
-    /**
-     * @dataProvider createCredentialsWrapperInvalidArgumentExceptionData
-     */
-    public function testCreateCredentialsWrapperInvalidArgumentException($auth, $authConfig)
-    {
-        $client = new StubGapicClient();
-
-        $this->expectException(InvalidArgumentException::class);
-
-        $client->createCredentialsWrapper(
-            $auth,
-            $authConfig,
-        );
-    }
-
-    public function createCredentialsWrapperInvalidArgumentExceptionData()
-    {
-        return [
-            [['array' => 'without right keys'], []],
         ];
     }
 
@@ -877,156 +856,6 @@ class GapicClientTraitTest extends TestCase
     }
 
     /**
-     * @dataProvider buildClientOptionsProvider
-     */
-    public function testBuildClientOptions($options, $expectedUpdatedOptions)
-    {
-        if (!extension_loaded('sysvshm')) {
-            $this->markTestSkipped('The sysvshm extension must be installed to execute this test.');
-        }
-        $client = new StubGapicClient();
-        $updatedOptions = $client->buildClientOptions($options);
-        $this->assertEquals($expectedUpdatedOptions, $updatedOptions);
-    }
-
-    public function buildClientOptionsProvider()
-    {
-        $apiConfig = new ApiConfig();
-        $apiConfig->mergeFromJsonString(
-            file_get_contents(__DIR__.'/testdata/test_service_grpc_config.json')
-        );
-        $grpcGcpConfig = new Config('test.address.com:443', $apiConfig);
-
-        $defaultOptions = [
-            'apiEndpoint' => 'test.address.com:443',
-            'serviceName' => 'test.interface.v1.api',
-            'clientConfig' => __DIR__ . '/testdata/test_service_client_config.json',
-            'descriptorsConfigPath' => __DIR__.'/testdata/test_service_descriptor_config.php',
-            'gcpApiConfigPath' => __DIR__.'/testdata/test_service_grpc_config.json',
-            'disableRetries' => false,
-            'auth' => null,
-            'authConfig' => null,
-            'transport' => null,
-            'transportConfig' => [
-                'grpc' => [
-                    'stubOpts' => [
-                        'grpc_call_invoker' => $grpcGcpConfig->callInvoker(),
-                        'grpc.service_config_disable_resolution' => 1
-                    ]
-                ],
-                'rest' => [
-                    'restClientConfigPath' => __DIR__.'/testdata/test_service_rest_client_config.php',
-                ],
-                'grpc-fallback' => [],
-            ],
-            'credentials' => null,
-            'credentialsConfig' => [],
-            'gapicVersion' => null,
-            'libName' => null,
-            'libVersion' => null,
-            'clientCertSource' => null,
-        ];
-
-        $restConfigOptions = $defaultOptions;
-        $restConfigOptions['transportConfig']['rest'] += [
-            'customRestConfig' => 'value'
-        ];
-        $grpcConfigOptions = $defaultOptions;
-        $grpcConfigOptions['transportConfig']['grpc'] += [
-            'customGrpcConfig' => 'value'
-        ];
-        return [
-            [[], $defaultOptions],
-            [
-                [
-                    'transportConfig' => [
-                        'rest' => [
-                            'customRestConfig' => 'value'
-                        ]
-                    ]
-                ], $restConfigOptions
-            ],
-            [
-                [
-                    'transportConfig' => [
-                        'grpc' => [
-                            'customGrpcConfig' => 'value'
-                        ]
-                    ]
-                ], $grpcConfigOptions
-            ],
-        ];
-    }
-
-    /**
-     * @dataProvider buildClientOptionsProviderRestOnly
-     */
-    public function testBuildClientOptionsRestOnly($options, $expectedUpdatedOptions)
-    {
-        if (!extension_loaded('sysvshm')) {
-            $this->markTestSkipped('The sysvshm extension must be installed to execute this test.');
-        }
-        $client = new RestOnlyGapicClient();
-        $updatedOptions = $client->buildClientOptions($options);
-        $this->assertEquals($expectedUpdatedOptions, $updatedOptions);
-    }
-
-    public function buildClientOptionsProviderRestOnly()
-    {
-        $defaultOptions = [
-            'apiEndpoint' => 'test.address.com:443',
-            'serviceName' => 'test.interface.v1.api',
-            'clientConfig' => __DIR__ . '/testdata/test_service_client_config.json',
-            'descriptorsConfigPath' => __DIR__.'/testdata/test_service_descriptor_config.php',
-            'disableRetries' => false,
-            'transport' => null,
-            'transportConfig' => [
-                'rest' => [
-                    'restClientConfigPath' => __DIR__.'/testdata/test_service_rest_client_config.php',
-                ],
-                'fake-transport' => []
-            ],
-            'credentials' => null,
-            'credentialsConfig' => [],
-            'gapicVersion' => null,
-            'libName' => null,
-            'libVersion' => null,
-            'clientCertSource' => null,
-        ];
-
-        $restConfigOptions = $defaultOptions;
-        $restConfigOptions['transportConfig']['rest'] += [
-            'customRestConfig' => 'value'
-        ];
-
-        $fakeTransportConfigOptions = $defaultOptions;
-        $fakeTransportConfigOptions['transportConfig']['fake-transport'] += [
-            'customRestConfig' => 'value'
-        ];
-        return [
-            [[], $defaultOptions],
-            [
-                [
-                    'transportConfig' => [
-                        'rest' => [
-                            'customRestConfig' => 'value'
-                        ]
-                    ]
-                ], $restConfigOptions
-            ],
-            [
-                [
-                    'transportConfig' => [
-                        'fake-transport' => [
-                            'customRestConfig' => 'value'
-                        ]
-                    ]
-                ], $fakeTransportConfigOptions
-            ],
-        ];
-    }
-
-    /**
      * @dataProvider buildRequestHeaderParams
      */
     public function testBuildRequestHeaders($headerParams, $request, $expected)
@@ -1079,7 +908,7 @@ class GapicClientTraitTest extends TestCase
             [
                 /* $headerParams */ [
                     [
-                        'fieldAccessors' => ['getNestedMessage','getName'],
+                        'fieldAccessors' => ['getNestedMessage', 'getName'],
                         'keyName' => 'name_field'
                     ],
                 ],
@@ -1089,7 +918,7 @@ class GapicClientTraitTest extends TestCase
             [
                 /* $headerParams */ [
                     [
-                        'fieldAccessors' => ['getNestedMessage','getName'],
+                        'fieldAccessors' => ['getNestedMessage', 'getName'],
                         'keyName' => 'name_field'
                     ],
                 ],
@@ -1099,7 +928,7 @@ class GapicClientTraitTest extends TestCase
             [
                 /* $headerParams */ [
                     [
-                        'fieldAccessors' => ['getNestedMessage','getName'],
+                        'fieldAccessors' => ['getNestedMessage', 'getName'],
                         'keyName' => 'name_field'
                     ],
                 ],
@@ -1114,9 +943,11 @@ class GapicClientTraitTest extends TestCase
         $options = [];
         $client = new StubGapicClientExtension();
         $updatedOptions = $client->buildClientOptions($options);
+        $client->setClientOptions($updatedOptions);
 
         $this->assertArrayHasKey('addNewOption', $updatedOptions);
         $this->assertTrue($updatedOptions['disableRetries']);
+        $this->assertEquals('abc123', $updatedOptions['apiEndpoint']);
     }
 
     private function buildClientToTestModifyCallMethods($clientClass = null)
@@ -1357,7 +1188,8 @@ class GapicClientTraitTest extends TestCase
                     ],
                     'credentialsWrapper' => $credentialsWrapper
                 ])
-            );
+            )
+            ->willReturn($this->prophesize(PromiseInterface::class)->reveal());
         $client = new StubGapicClient();
         $updatedOptions = $client->buildClientOptions(
             [
@@ -1378,43 +1210,6 @@ class GapicClientTraitTest extends TestCase
         );
     }
 
-    public function testDefaultScopes()
-    {
-        $client = new DefaultScopeAndAudienceGapicClient();
-
-        // verify scopes are not set by default
-        $defaultOptions = $client->buildClientOptions([]);
-        $this->assertArrayNotHasKey('scopes', $defaultOptions['credentialsConfig']);
-
-        // verify scopes are set when a custom api endpoint is used
-        $defaultOptions = $client->buildClientOptions([
-            'apiEndpoint' => 'www.someotherendpoint.com',
-        ]);
-        $this->assertArrayHasKey('scopes', $defaultOptions['credentialsConfig']);
-        $this->assertEquals(
-            $client::$serviceScopes,
-            $defaultOptions['credentialsConfig']['scopes']
-        );
-
-        // verify user-defined scopes override default scopes
-        $defaultOptions = $client->buildClientOptions([
-            'credentialsConfig' => ['scopes' => ['user-scope-1']],
-            'apiEndpoint' => 'www.someotherendpoint.com',
-        ]);
-        $this->assertArrayHasKey('scopes', $defaultOptions['credentialsConfig']);
-        $this->assertEquals(
-            ['user-scope-1'],
-            $defaultOptions['credentialsConfig']['scopes']
-        );
-
-        // verify empty default scopes has no effect
-        $client::$serviceScopes = null;
-        $defaultOptions = $client->buildClientOptions([
-            'apiEndpoint' => 'www.someotherendpoint.com',
-        ]);
-        $this->assertArrayNotHasKey('scopes', $defaultOptions['credentialsConfig']);
-    }
-
     public function testDefaultAudience()
     {
         $retrySettings = $this->prophesize(RetrySettings::class);
@@ -1430,7 +1225,8 @@ class GapicClientTraitTest extends TestCase
                     'credentialsWrapper' => $credentialsWrapper,
                 ]
             )
-            ->shouldBeCalledOnce();
+            ->shouldBeCalledOnce()
+            ->willReturn($this->prophesize(PromiseInterface::class)->reveal());
 
         $client = new DefaultScopeAndAudienceGapicClient();
         $client->set('credentialsWrapper', $credentialsWrapper);
@@ -1451,7 +1247,8 @@ class GapicClientTraitTest extends TestCase
                     'credentialsWrapper' => $credentialsWrapper,
                 ]
             )
-            ->shouldBeCalledOnce();
+            ->shouldBeCalledOnce()
+            ->willReturn($this->prophesize(PromiseInterface::class)->reveal());
 
         $client->startCall('method.name', 'decodeType', [
             'audience' => 'custom-audience',
@@ -1578,142 +1375,76 @@ class GapicClientTraitTest extends TestCase
         $this->assertInstanceOf(RestTransport::class, $client->getTransport());
     }
 
-    /** @dataProvider provideDetermineMtlsEndpoint */
-    public function testDetermineMtlsEndpoint($apiEndpoint, $expected)
+    public function testAddMiddlewares()
     {
-        $client = new StubGapicClient();
+        list($client, $transport) = $this->buildClientToTestModifyCallMethods();
 
-        $this->assertEquals(
-            $expected,
-            $client->determineMtlsEndpoint($apiEndpoint)
-        );
-    }
+        $m1Called = false;
+        $m2Called = false;
+        $middleware1 = function (MiddlewareInterface $handler) use (&$m1Called) {
+            return new class($handler, $m1Called) implements MiddlewareInterface {
+                private MiddlewareInterface $handler;
+                private bool $m1Called;
+                public function __construct(
+                    MiddlewareInterface $handler,
+                    bool &$m1Called
+                ) {
+                    $this->handler = $handler;
+                    $this->m1Called = &$m1Called;
+                }
+                public function __invoke(Call $call, array $options)
+                {
+                    $this->m1Called = true;
+                    return ($this->handler)($call, $options);
+                }
+            };
+        };
+        $middleware2 = function (MiddlewareInterface $handler) use (&$m2Called) {
+            return new class($handler, $m2Called) implements MiddlewareInterface {
+                private MiddlewareInterface $handler;
+                private bool $m2Called;
+                public function __construct(
+                    MiddlewareInterface $handler,
+                    bool &$m2Called
+                ) {
+                    $this->handler = $handler;
+                    $this->m2Called = &$m2Called;
+                }
+                public function __invoke(Call $call, array $options)
+                {
+                    $this->m2Called = true;
+                    return ($this->handler)($call, $options);
+                }
+            };
+        };
+        $client->addMiddleware($middleware1);
+        $client->addMiddleware($middleware2);
 
-    public function provideDetermineMtlsEndpoint()
-    {
-        return [
-            ['foo', 'foo'],         // invalid no-op
-            ['api.dev', 'api.dev'], // invalid no-op
-            // normal endpoint
-            ['vision.googleapis.com', 'vision.mtls.googleapis.com'],
-            // endpoint with protocol
-            ['https://vision.googleapis.com', 'https://vision.mtls.googleapis.com'],
-            // endpoint with protocol and path
-            ['https://vision.googleapis.com/foo', 'https://vision.mtls.googleapis.com/foo'],
-            // regional endpoint
-            ['us-documentai.googleapis.com', 'us-documentai.mtls.googleapis.com'],
-        ];
-    }
+        $transport->expects($this->once())
+            ->method('startUnaryCall')
+            ->with(
+                $this->isInstanceOf(Call::class),
+                $this->equalTo([
+                    'transportOptions' => [
+                        'custom' => ['addModifyUnaryCallableOption' => true]
+                    ],
+                    'headers' => AgentHeader::buildAgentHeader([]),
+                    'credentialsWrapper' => CredentialsWrapper::build([
+                        'keyFile' => __DIR__ . '/testdata/json-key-file.json'
+                    ])
+                ])
+            )
+            ->willReturn(new FulfilledPromise(new Operation()));
 
-    /**
-     * @runInSeparateProcess
-     * @dataProvider provideShouldUseMtlsEndpoint
-     */
-    public function testShouldUseMtlsEndpoint($envVarValue, $options, $expected)
-    {
-        $client = new StubGapicClient();
+        $client->startCall(
+            'simpleMethod',
+            'decodeType',
+            [],
+            new MockRequest(),
+        )->wait();
 
-        putenv('GOOGLE_API_USE_MTLS_ENDPOINT=' . $envVarValue);
-        $this->assertEquals(
-            $expected,
-            $client->shouldUseMtlsEndpoint($options)
-        );
-    }
-
-    public function provideShouldUseMtlsEndpoint()
-    {
-        return [
-            ['', [], false],
-            ['always', [], true],
-            ['never', [], false],
-            ['never', ['clientCertSource' => true], false],
-            ['auto', ['clientCertSource' => true], true],
-            ['invalid', ['clientCertSource' => true], true],
-            ['', ['clientCertSource' => true], true],
-        ];
-    }
-
-    /**
-     * @runInSeparateProcess
-     * @dataProvider provideMtlsClientOptions
-     */
-    public function testMtlsClientOptions($envVars, $options, $expected)
-    {
-        foreach ($envVars as $envVar) {
-            putenv($envVar);
-        }
-
-        $client = new StubGapicClient();
-        $options = $client->buildClientOptions($options);
-
-        // Only check the keys we care about
-        $options = array_intersect_key(
-            $options,
-            array_flip(['apiEndpoint', 'clientCertSource'])
-        );
-
-        $this->assertEquals($expected, $options);
-    }
-
-    public function provideMtlsClientOptions()
-    {
-        $defaultEndpoint = 'test.address.com:443';
-        $mtlsEndpoint = 'test.mtls.address.com:443';
-        return [
-            [
-                [],
-                [],
-                ['apiEndpoint' => $defaultEndpoint, 'clientCertSource' => null]
-            ],
-            [
-                ['GOOGLE_API_USE_MTLS_ENDPOINT=always'],
-                [],
-                ['apiEndpoint' => $mtlsEndpoint, 'clientCertSource' => null]
-            ],
-            [
-                ['GOOGLE_API_USE_MTLS_ENDPOINT=always'],
-                ['apiEndpoint' => 'user.supplied.endpoint:443'],
-                ['apiEndpoint' => 'user.supplied.endpoint:443', 'clientCertSource' => null]
-            ],
-            [
-                ['GOOGLE_API_USE_MTLS_ENDPOINT=never'],
-                ['clientCertSource' => true],
-                ['apiEndpoint' => $defaultEndpoint, 'clientCertSource' => true]
-            ],
-            [
-                [
-                    'GOOGLE_API_USE_MTLS_ENDPOINT=auto'
-                ],
-                ['clientCertSource' => true],
-                ['apiEndpoint' => $mtlsEndpoint, 'clientCertSource' => true]
-            ],
-            [
-                [
-                    'HOME=' . __DIR__ . '/testdata/nonexistant',
-                    'GOOGLE_API_USE_MTLS_ENDPOINT', // no env var
-                    CredentialsLoader::MTLS_CERT_ENV_VAR . '=true',
-                ],
-                [],
-                ['apiEndpoint' => $defaultEndpoint, 'clientCertSource' => null]
-            ],
-        ];
-    }
-
-    /**
-     * @runInSeparateProcess
-     */
-    public function testMtlsClientOptionWithDefaultClientCertSource()
-    {
-        putenv('HOME=' . __DIR__ . '/testdata/mtls');
-        putenv('GOOGLE_API_USE_MTLS_ENDPOINT=auto');
-        putenv(CredentialsLoader::MTLS_CERT_ENV_VAR . '=true');
-
-        $client = new StubGapicClient();
-        $options = $client->buildClientOptions([]);
-
-        $this->assertSame('test.mtls.address.com:443', $options['apiEndpoint']);
-        $this->assertTrue(is_callable($options['clientCertSource']));
-        $this->assertEquals(['foo', 'foo'], $options['clientCertSource']());
+        $this->assertTrue($m1Called);
+        $this->assertTrue($m2Called);
     }
 
     public function testInvalidClientOptionsTypeThrowsExceptionForV2SurfaceOnly()
@@ -1750,7 +1481,8 @@ class GapicClientTraitTest extends TestCase
                     'credentialsWrapper' => CredentialsWrapper::build([
                         'keyFile' => __DIR__ . '/testdata/json-key-file.json'
                     ]),
-                    'timeoutMillis' => null, // adds null timeoutMillis
+                    'timeoutMillis' => null, // adds null timeoutMillis,
+                    'transportOptions' => [],
                 ])
             )
             ->willReturn(new FulfilledPromise(new Operation()));
@@ -1864,19 +1596,27 @@ class StubGapicClient
             'apiEndpoint' => 'test.address.com:443',
             'serviceName' => 'test.interface.v1.api',
             'clientConfig' => __DIR__ . '/testdata/test_service_client_config.json',
-            'descriptorsConfigPath' => __DIR__.'/testdata/test_service_descriptor_config.php',
-            'gcpApiConfigPath' => __DIR__.'/testdata/test_service_grpc_config.json',
+            'descriptorsConfigPath' => __DIR__ . '/testdata/test_service_descriptor_config.php',
+            'gcpApiConfigPath' => __DIR__ . '/testdata/test_service_grpc_config.json',
             'disableRetries' => false,
             'auth' => null,
             'authConfig' => null,
             'transport' => null,
             'transportConfig' => [
                 'rest' => [
-                    'restClientConfigPath' => __DIR__.'/testdata/test_service_rest_client_config.php',
+                    'restClientConfigPath' => __DIR__ . '/testdata/test_service_rest_client_config.php',
                 ]
             ],
         ];
     }
+}
+
+class VersionedStubGapicClient extends StubGapicClient
+{
+    // The API version will come from the client library who uses the GapicClientTrait
+    // so in that one it will be private vs Protected. In this case I used protected so
+    // the parent class can see it.
+    protected $apiVersion = '20240418';
 }
 
 trait GapicClientStubTrait
@@ -1908,6 +1648,7 @@ class StubGapicClientExtension extends StubGapicClient
     {
         $options['disableRetries'] = true;
         $options['addNewOption'] = true;
+        $options['apiEndpoint'] = 'abc123';
     }
 
     protected function modifyUnaryCallable(callable &$callable)
@@ -1980,10 +1721,10 @@ class RestOnlyGapicClient
             'apiEndpoint' => 'test.address.com:443',
             'serviceName' => 'test.interface.v1.api',
             'clientConfig' => __DIR__ . '/testdata/test_service_client_config.json',
-            'descriptorsConfigPath' => __DIR__.'/testdata/test_service_descriptor_config.php',
+            'descriptorsConfigPath' => __DIR__ . '/testdata/test_service_descriptor_config.php',
             'transportConfig' => [
                 'rest' => [
-                    'restClientConfigPath' => __DIR__.'/testdata/test_service_rest_client_config.php',
+                    'restClientConfigPath' => __DIR__ . '/testdata/test_service_rest_client_config.php',
                 ]
             ],
         ];
@@ -2041,10 +1782,10 @@ class GapicV2SurfaceClient
             'apiEndpoint' => 'test.address.com:443',
             'serviceName' => 'test.interface.v1.api',
             'clientConfig' => __DIR__ . '/testdata/test_service_client_config.json',
-            'descriptorsConfigPath' => __DIR__.'/testdata/test_service_descriptor_config.php',
+            'descriptorsConfigPath' => __DIR__ . '/testdata/test_service_descriptor_config.php',
             'transportConfig' => [
                 'rest' => [
-                    'restClientConfigPath' => __DIR__.'/testdata/test_service_rest_client_config.php',
+                    'restClientConfigPath' => __DIR__ . '/testdata/test_service_rest_client_config.php',
                 ]
             ],
         ];

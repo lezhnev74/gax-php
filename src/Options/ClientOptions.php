@@ -91,6 +91,8 @@ class ClientOptions implements ArrayAccess
 
     private ?Closure $clientCertSource;
 
+    private ?string $universeDomain;
+
     /**
      * @param array $options {
      *     @type string $apiEndpoint
@@ -147,6 +149,8 @@ class ClientOptions implements ArrayAccess
      *           The code generator version of the GAPIC library.
      *     @type callable $clientCertSource
      *           A callable which returns the client cert as a string.
+     *     @type string $universeDomain
+     *           The default service domain for a given Cloud universe.
      * }
      */
     public function __construct(array $options)
@@ -164,17 +168,18 @@ class ClientOptions implements ArrayAccess
         $this->setApiEndpoint($arr['apiEndpoint'] ?? null);
         $this->setDisableRetries($arr['disableRetries'] ?? false);
         $this->setClientConfig($arr['clientConfig'] ?? []);
-        $this->setCredentials($arr['credentials']);
+        $this->setCredentials($arr['credentials'] ?? null);
         $this->setCredentialsConfig($arr['credentialsConfig'] ?? []);
         $this->setTransport($arr['transport'] ?? null);
         $this->setTransportConfig(new TransportOptions($arr['transportConfig'] ?? []));
         $this->setVersionFile($arr['versionFile'] ?? null);
-        $this->setDescriptorsConfigPath($arr['descriptorsConfigPath']);
+        $this->setDescriptorsConfigPath($arr['descriptorsConfigPath'] ?? null);
         $this->setServiceName($arr['serviceName'] ?? null);
         $this->setLibName($arr['libName'] ?? null);
         $this->setLibVersion($arr['libVersion'] ?? null);
         $this->setGapicVersion($arr['gapicVersion'] ?? null);
         $this->setClientCertSource($arr['clientCertSource'] ?? null);
+        $this->setUniverseDomain($arr['universeDomain'] ?? null);
     }
 
     /**
@@ -297,8 +302,16 @@ class ClientOptions implements ArrayAccess
     public function setClientCertSource(?callable $clientCertSource)
     {
         if (!is_null($clientCertSource)) {
-            $this->clientCertSource = Closure::fromCallable($clientCertSource);
+            $clientCertSource = Closure::fromCallable($clientCertSource);
         }
         $this->clientCertSource = $clientCertSource;
+    }
+
+    /**
+     * @param string $universeDomain
+     */
+    public function setUniverseDomain(?string $universeDomain)
+    {
+        $this->universeDomain = $universeDomain;
     }
 }

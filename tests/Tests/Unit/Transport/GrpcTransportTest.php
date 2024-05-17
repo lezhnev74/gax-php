@@ -387,6 +387,8 @@ class GrpcTransportTest extends TestCase
         $call->getDecodeType()->shouldBeCalled();
 
         $credentialsWrapper = $this->prophesize(CredentialsWrapper::class);
+        $credentialsWrapper->checkUniverseDomain()
+            ->shouldBeCalledOnce();
         $credentialsWrapper->getAuthorizationHeaderCallback('an-audience')
             ->shouldBeCalledOnce();
         $hostname = '';
@@ -583,6 +585,7 @@ class GrpcTransportTest extends TestCase
 class MockCallInvoker implements CallInvoker
 {
     private $called = false;
+    private $mockCall;
 
     public function __construct($mockCall)
     {

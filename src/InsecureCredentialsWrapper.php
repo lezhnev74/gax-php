@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright 2018 Google LLC
+ * Copyright 2024 Google LLC
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,51 +29,28 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-namespace Google\ApiCore\Middleware;
 
-use Google\ApiCore\Call;
-use Google\ApiCore\Page;
-use Google\ApiCore\PagedListResponse;
-use Google\ApiCore\PageStreamingDescriptor;
-use Google\Protobuf\Internal\Message;
-use GuzzleHttp\Promise\PromiseInterface;
+namespace Google\ApiCore;
 
 /**
-* Middleware which wraps the response in an PagedListResponses object.
-*/
-class PagedMiddleware implements MiddlewareInterface
+ * For connect to emulator.
+ */
+class InsecureCredentialsWrapper extends CredentialsWrapper
 {
-    /** @var callable */
-    private $nextHandler;
-    private PageStreamingDescriptor $descriptor;
-
-    /**
-     * @param callable $nextHandler
-     * @param PageStreamingDescriptor $descriptor
-     */
-    public function __construct(
-        callable $nextHandler,
-        PageStreamingDescriptor $descriptor
-    ) {
-        $this->nextHandler = $nextHandler;
-        $this->descriptor = $descriptor;
+    public function __construct()
+    {
     }
 
-    public function __invoke(Call $call, array $options)
+    /**
+     * @param string $audience
+     * @return callable|null Returns null so the gRPC can accept it as an insecure channel.
+     */
+    public function getAuthorizationHeaderCallback($audience = null): ?callable
     {
-        $next = $this->nextHandler;
-        $descriptor = $this->descriptor;
-        return $next($call, $options)->then(
-            function (Message $response) use ($call, $next, $options, $descriptor) {
-                $page = new Page(
-                    $call,
-                    $options,
-                    $next,
-                    $descriptor,
-                    $response
-                );
-                return new PagedListResponse($page);
-            }
-        );
+        return null;
+    }
+
+    public function checkUniverseDomain(): void
+    {
     }
 }

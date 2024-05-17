@@ -32,6 +32,10 @@
 
 namespace Google\ApiCore;
 
+use Google\LongRunning\Client\OperationsClient;
+use Google\LongRunning\CancelOperationRequest;
+use Google\LongRunning\DeleteOperationRequest;
+use Google\LongRunning\GetOperationRequest;
 use Google\LongRunning\Operation;
 use Google\Protobuf\Any;
 use Google\Protobuf\Internal\Message;
@@ -61,29 +65,30 @@ class OperationResponse
     const DEFAULT_MAX_POLLING_INTERVAL = 60000;
     const DEFAULT_MAX_POLLING_DURATION = 0;
 
-    private $operationName;
-    private $operationsClient;
+    private string $operationName;
+    private ?object $operationsClient;
 
-    private $operationReturnType;
-    private $metadataReturnType;
-    private $defaultPollSettings = [
+    private ?string $operationReturnType;
+    private ?string $metadataReturnType;
+    private array $defaultPollSettings = [
         'initialPollDelayMillis' => self::DEFAULT_POLLING_INTERVAL,
         'pollDelayMultiplier' => self::DEFAULT_POLLING_MULTIPLIER,
         'maxPollDelayMillis' => self::DEFAULT_MAX_POLLING_INTERVAL,
         'totalPollTimeoutMillis' => self::DEFAULT_MAX_POLLING_DURATION,
     ];
 
-    private $lastProtoResponse;
-    private $deleted = false;
+    private ?object $lastProtoResponse;
+    private bool $deleted = false;
 
-    private $additionalArgs;
-    private $getOperationMethod;
-    private $cancelOperationMethod;
-    private $deleteOperationMethod;
-    private $operationStatusMethod;
+    private array $additionalArgs;
+    private string $getOperationMethod;
+    private ?string $cancelOperationMethod;
+    private ?string $deleteOperationMethod;
+    private string $operationStatusMethod;
+    /** @var mixed */
     private $operationStatusDoneValue;
-    private $operationErrorCodeMethod;
-    private $operationErrorMessageMethod;
+    private ?string $operationErrorCodeMethod;
+    private ?string $operationErrorMessageMethod;
 
     /**
      * OperationResponse constructor.
@@ -260,8 +265,7 @@ class OperationResponse
         }
         $this->lastProtoResponse = $this->operationsCall(
             $this->getOperationMethod,
-            $this->getName(),
-            $this->additionalArgs
+            GetOperationRequest::class
         );
     }
 
@@ -385,7 +389,10 @@ class OperationResponse
         if (is_null($this->cancelOperationMethod)) {
             throw new LogicException('The cancel operation is not supported by this API');
         }
-        $this->operationsCall($this->cancelOperationMethod, $this->getName(), $this->additionalArgs);
+        $this->operationsCall(
+            $this->cancelOperationMethod,
+            CancelOperationRequest::class
+        );
     }
 
     /**
@@ -404,7 +411,10 @@ class OperationResponse
         if (is_null($this->deleteOperationMethod)) {
             throw new LogicException('The delete operation is not supported by this API');
         }
-        $this->operationsCall($this->deleteOperationMethod, $this->getName(), $this->additionalArgs);
+        $this->operationsCall(
+            $this->deleteOperationMethod,
+            DeleteOperationRequest::class
+        );
         $this->deleted = true;
     }
 
@@ -446,9 +456,12 @@ class OperationResponse
         return $metadata;
     }
 
-    private function operationsCall($method, $name, array $additionalArgs)
+    private function operationsCall(string $method, string $requestClass)
     {
-        $args = array_merge([$name], $additionalArgs);
+        $firstArgument = $this->operationsClient instanceof OperationsClient
+            ? $requestClass::build($this->getName())
+            : $this->getName();
+        $args = array_merge([$firstArgument], $this->additionalArgs);
         return call_user_func_array([$this->operationsClient, $method], $args);
     }
 
